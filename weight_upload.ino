@@ -9,52 +9,75 @@
 #include <EthernetUdp.h>
 
 #include <PFFIAPUploadAgent.h>
-#include <Time.h>
+#include <TimeLib.h>
 #include <SerialCLI.h>
 #include <HX711.h>
 #include <NTP.h>
-#include <Wire.h>
+
+#define CHANNEL1_SCALE_CALIB -430.6142
+#define CHANNEL2_SCALE_CALIB -457.5805
+#define CHANNEL3_SCALE_CALIB -449.0159
+#define CHANNEL4_SCALE_CALIB -489.1717
+
+#define CHANNEL1_SCALE_SDA 3
+#define CHANNEL1_SCALE_SCK 2
+#define CHANNEL2_SCALE_SDA 5
+#define CHANNEL2_SCALE_SCK 4
+#define CHANNEL3_SCALE_SDA 7
+#define CHANNEL3_SCALE_SCK 6
+#define CHANNEL4_SCALE_SDA 9
+#define CHANNEL4_SCALE_SCK 8
+
+#define SEND_SEC 60
 
 //cli
 SerialCLI commandline(Serial);
 //  ethernet
-MacEntry mac("MAC", "12:34:56:78:9A:BC", "mac address");
+MacEntry mac("MAC", "B0:12:66:01:02:89", "mac address");
 //  ip
 BoolEntry dhcp("DHCP", "true", "DHCP enable/disable");
-IPAddressEntry ip("IP", "192.168.0.2", "IP address");
-IPAddressEntry gw("GW", "255.255.255.0", "default gateway IP address");
-IPAddressEntry sm("SM", "192.168.0.1", "subnet mask");
+IPAddressEntry ip("IP", "192.168.13.127", "IP address");
+IPAddressEntry gw("GW", "192.168.13.1", "default gateway IP address");
+IPAddressEntry sm("SM", "255.255.255.0", "subnet mask");
 IPAddressEntry dns_server("DNS", "8.8.8.8", "dns server");
 //  ntp
 StringEntry ntp("NTP", "ntp.nict.jp", "ntp server");
 //  fiap
-StringEntry host("HOST", "fiap-dev.gutp.ic.i.u-tokyo.ac.jp", "host of ieee1888 server end point");
+StringEntry host("HOST", "202.15.110.21", "host of ieee1888 server end point");
 IntegerEntry port("PORT", "80", "port of ieee1888 server end point");
 StringEntry path("PATH", "/axis2/services/FIAPStorage", "path of ieee1888 server end point");
-StringEntry prefix("PREFIX", "http://j.kisarazu.ac.jp/OpenLaboD/Chanba/Weight", "prefix of point id");
+StringEntry prefix("PREFIX", "http://j.kisarazu.ac.jp/OpenLaboD/Frame/Weight/", "prefix of point id");
 StringEntry timezone("TIMEZONE", "+09:00", "timezone");
 //  debug
-int debug = 0;
+int debug = 1;
 
 //ntp
 NTPClient ntpclient;
 
 //fiap
 FIAPUploadAgent fiap_upload_agent;
-char *timezone_p;
-char weight_bottom1_str[16];
-char weight_bottom2_str[16];
-char weight_top_str[16];
+char timezone_p[16] = "+09:00";
+char channel1_weight_str[16];
+char channel2_weight_str[16];
+char channel3_weight_str[16];
+char channel4_weight_str[16];
+char total_weight_str[16];
+
 struct fiap_element fiap_elements [] = {
-  { "Bottom1", weight_bottom1_str, 0, 0, 0, 0, 0, 0, timezone_p, },
-  { "Bottom2", weight_bottom2_str, 0, 0, 0, 0, 0, 0, timezone_p, },
-  { "Top", weight_top_str, 0, 0, 0, 0, 0, 0, timezone_p, },
+  { "CHANNEL1", channel1_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
+  { "CHANNEL2", channel2_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
+  { "CHANNEL3", channel3_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
+  { "CHANNEL4", channel4_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
+  { "TOTAL", total_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
 };
 
 //sensor
-HX711 scale_bottom1(A1, A0);
-HX711 scale_bottom2(A3, A2);
-HX711 scale_top(A5, A4);
+HX711 channel1_scale(CHANNEL1_SCALE_SDA, CHANNEL1_SCALE_SCK);
+HX711 channel2_scale(CHANNEL2_SCALE_SDA, CHANNEL2_SCALE_SCK);
+HX711 channel3_scale(CHANNEL3_SCALE_SDA, CHANNEL3_SCALE_SCK);
+HX711 channel4_scale(CHANNEL4_SCALE_SDA, CHANNEL4_SCALE_SCK);
+
+float weights[4];
 
 void enable_debug()
 {
@@ -68,6 +91,10 @@ void disable_debug()
 
 void setup()
 {
+  pinMode(22, OUTPUT);
+  pinMode(23, OUTPUT);
+  digitalWrite(22, HIGH);
+  
   int ret;
   commandline.add_entry(&mac);
 
@@ -89,7 +116,7 @@ void setup()
 
   commandline.begin(9600, "SerialCLI Sample");
 
-  // ethernet & ip connection
+  //ethernet & ip connection
   if(dhcp.get_val() == 1){
     ret = Ethernet.begin(mac.get_val());
     if(ret == 0) {
@@ -100,7 +127,7 @@ void setup()
   }
 
   // fetch time
-  uint32_t unix_time;
+  uint32_t unix_time = 0;
   ntpclient.begin();
   ret = ntpclient.getTime(ntp.get_val(), &unix_time);
   if(ret < 0){
@@ -109,20 +136,32 @@ void setup()
   setTime(unix_time + (9 * 60 * 60));
 
   // fiap
-  fiap_upload_agent.begin(host.get_val(), path.get_val(), port.get_val(), prefix.get_val());
+  fiap_upload_agent.begin(host.get_val().c_str(), path.get_val().c_str(), port.get_val(), prefix.get_val().c_str());
 
   // sensor
-  scale_bottom1.set_scale(2240);
-  scale_bottom2.set_scale(2240);
-  scale_top.set_scale(2240);
-
-  Serial.println("Measurement will be starting at 2 min after.");
+  channel1_scale.set_scale(CHANNEL1_SCALE_CALIB);
+  channel2_scale.set_scale(CHANNEL2_SCALE_CALIB);
+  channel3_scale.set_scale(CHANNEL3_SCALE_CALIB);
+  channel4_scale.set_scale(CHANNEL4_SCALE_CALIB);
+  
+  digitalWrite(23, HIGH);
+  
+  Serial.println("Measurement will be starting at 1 min after.");
   Serial.println("Please remove all weights from scale.");
-  wait(2);
+//  wait(1);
 
-  scale_bottom1.tare();
-  scale_bottom2.tare();
-  scale_top.tare();
+  delay(10000);
+  channel1_scale.tare();
+  channel2_scale.tare();
+  channel3_scale.tare();
+  channel4_scale.tare();
+  delay(5000);
+  channel1_scale.tare();
+  channel2_scale.tare();
+  channel3_scale.tare();
+  channel4_scale.tare();
+  
+  digitalWrite(23, LOW);
 }
 
 void loop()
@@ -137,19 +176,47 @@ void loop()
 
   if(epoch != old_epoch){
     char buf[32];
-    sprintf(buf, "bottom1 weight = %f", scale_bottom1.get_units(5));
+
+    channel1_scale.power_up();
+    channel2_scale.power_up();
+    channel3_scale.power_up();
+    channel4_scale.power_up();
+
+    weights[0] = channel1_scale.get_units();
+    weights[1] = channel2_scale.get_units();
+    weights[2] = channel3_scale.get_units();
+    weights[3] = channel4_scale.get_units();
+    
+    dtostrf(weights[0], 4, 1, channel1_weight_str);
+    dtostrf(weights[1], 4, 1, channel2_weight_str);
+    dtostrf(weights[2], 4, 1, channel3_weight_str);
+    dtostrf(weights[3], 4, 1, channel4_weight_str);
+    dtostrf(weights[0]+weights[1]+weights[2]+weights[3], 4, 1, total_weight_str);
+    
+    sprintf(buf, "channel1 weight = %s", channel1_weight_str);
     debug_msg(buf);
-    sprintf(buf, "bottom2 weight = %f", scale_bottom2.get_units(5));
+    sprintf(buf, "channel2 weight = %s", channel2_weight_str);
     debug_msg(buf);
-    sprintf(buf, "top weight = %f", scale_top.get_units(5));
+    sprintf(buf, "channel3 weight = %s", channel3_weight_str);
+    debug_msg(buf);
+    sprintf(buf, "channel4 weight = %s", channel4_weight_str);
+    debug_msg(buf);
+    sprintf(buf, "total weight = %s", total_weight_str);
     debug_msg(buf);
 
     if(epoch % 60 == 0){
       debug_msg("uploading...");
-      sprintf(weight_bottom1_str, "%f", scale_bottom1.get_units(5));
-      sprintf(weight_bottom2_str, "%f", scale_bottom2.get_units(5));
-      sprintf(weight_top_str, "%f", scale_top.get_units(5));
-      timezone_p = (char*)timezone.get_val().c_str();
+
+      weights[0] = channel1_scale.get_units(5);
+      weights[1] = channel2_scale.get_units(5);
+      weights[2] = channel3_scale.get_units(5);
+      weights[3] = channel4_scale.get_units(5);
+      
+      dtostrf(weights[0], 4, 1, channel1_weight_str);
+      dtostrf(weights[1], 4, 1, channel2_weight_str);
+      dtostrf(weights[2], 4, 1, channel3_weight_str);
+      dtostrf(weights[3], 4, 1, channel4_weight_str);
+      dtostrf(weights[0]+weights[1]+weights[2]+weights[3], 4, 1, total_weight_str);
 
       for(int i = 0; i < sizeof(fiap_elements)/sizeof(fiap_elements[0]); i++){
         fiap_elements[i].year = year();
@@ -164,10 +231,15 @@ void loop()
         debug_msg("done");
       }else{
         debug_msg("failed");
+        Serial.println(ret);
       }
-      Serial.println(ret);
     }
   }
+
+  channel1_scale.power_down();
+  channel2_scale.power_down();
+  channel3_scale.power_down();
+  channel4_scale.power_down();
 
   old_epoch = epoch;
 }
@@ -207,10 +279,14 @@ void restart(String msg, int restart_minutes)
 }
 
 void wait(int minutes) {
+  Serial.println();
+  Serial.print("Waiting");
   unsigned int start_ms = millis();
+  unsigned int start_s  = now();
   while(1){
     commandline.process();
     if(millis() - start_ms > minutes*60UL*1000UL){
+      Serial.println();
       break;
     }
   }
