@@ -14,19 +14,19 @@
 #include <HX711.h>
 #include <NTP.h>
 
-#define CHANNEL1_SCALE_CALIB -430.6142
-#define CHANNEL2_SCALE_CALIB -457.5805
-#define CHANNEL3_SCALE_CALIB -449.0159
-#define CHANNEL4_SCALE_CALIB -489.1717
+#define CHANNEL0_SCALE_CALIB -430.6142
+#define CHANNEL1_SCALE_CALIB -457.5805
+#define CHANNEL2_SCALE_CALIB -449.0159
+#define CHANNEL3_SCALE_CALIB -489.1717
 
-#define CHANNEL1_SCALE_SDA 3
-#define CHANNEL1_SCALE_SCK 2
-#define CHANNEL2_SCALE_SDA 5
-#define CHANNEL2_SCALE_SCK 4
-#define CHANNEL3_SCALE_SDA 7
-#define CHANNEL3_SCALE_SCK 6
-#define CHANNEL4_SCALE_SDA 9
-#define CHANNEL4_SCALE_SCK 8
+#define CHANNEL0_SCALE_SDA 3
+#define CHANNEL0_SCALE_SCK 2
+#define CHANNEL1_SCALE_SDA 5
+#define CHANNEL1_SCALE_SCK 4
+#define CHANNEL2_SCALE_SDA 7
+#define CHANNEL2_SCALE_SCK 6
+#define CHANNEL3_SCALE_SDA 9
+#define CHANNEL3_SCALE_SCK 8
 
 #define SEND_SEC 60
 
@@ -57,25 +57,25 @@ NTPClient ntpclient;
 //fiap
 FIAPUploadAgent fiap_upload_agent;
 char timezone_p[16] = "+09:00";
+char channel0_weight_str[16];
 char channel1_weight_str[16];
 char channel2_weight_str[16];
 char channel3_weight_str[16];
-char channel4_weight_str[16];
 char total_weight_str[16];
 
 struct fiap_element fiap_elements [] = {
+  { "CHANNEL0", channel0_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
   { "CHANNEL1", channel1_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
   { "CHANNEL2", channel2_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
   { "CHANNEL3", channel3_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
-  { "CHANNEL4", channel4_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
   { "TOTAL", total_weight_str, 0, 0, 0, 0, 0, 0, timezone_p, },
 };
 
 //sensor
+HX711 channel0_scale(CHANNEL0_SCALE_SDA, CHANNEL0_SCALE_SCK);
 HX711 channel1_scale(CHANNEL1_SCALE_SDA, CHANNEL1_SCALE_SCK);
 HX711 channel2_scale(CHANNEL2_SCALE_SDA, CHANNEL2_SCALE_SCK);
 HX711 channel3_scale(CHANNEL3_SCALE_SDA, CHANNEL3_SCALE_SCK);
-HX711 channel4_scale(CHANNEL4_SCALE_SDA, CHANNEL4_SCALE_SCK);
 
 float weights[4];
 
@@ -139,10 +139,10 @@ void setup()
   fiap_upload_agent.begin(host.get_val().c_str(), path.get_val().c_str(), port.get_val(), prefix.get_val().c_str());
 
   // sensor
+  channel0_scale.set_scale(CHANNEL0_SCALE_CALIB);
   channel1_scale.set_scale(CHANNEL1_SCALE_CALIB);
   channel2_scale.set_scale(CHANNEL2_SCALE_CALIB);
   channel3_scale.set_scale(CHANNEL3_SCALE_CALIB);
-  channel4_scale.set_scale(CHANNEL4_SCALE_CALIB);
   
   digitalWrite(23, HIGH);
   
@@ -151,15 +151,15 @@ void setup()
 //  wait(1);
 
   delay(10000);
+  channel0_scale.tare();
   channel1_scale.tare();
   channel2_scale.tare();
   channel3_scale.tare();
-  channel4_scale.tare();
   delay(5000);
+  channel0_scale.tare();
   channel1_scale.tare();
   channel2_scale.tare();
   channel3_scale.tare();
-  channel4_scale.tare();
   
   digitalWrite(23, LOW);
 }
@@ -177,29 +177,29 @@ void loop()
   if(epoch != old_epoch){
     char buf[32];
 
+    channel0_scale.power_up();
     channel1_scale.power_up();
     channel2_scale.power_up();
     channel3_scale.power_up();
-    channel4_scale.power_up();
 
-    weights[0] = channel1_scale.get_units();
-    weights[1] = channel2_scale.get_units();
-    weights[2] = channel3_scale.get_units();
-    weights[3] = channel4_scale.get_units();
+    weights[0] = channel0_scale.get_units();
+    weights[1] = channel1_scale.get_units();
+    weights[2] = channel2_scale.get_units();
+    weights[3] = channel3_scale.get_units();
     
-    dtostrf(weights[0], 4, 1, channel1_weight_str);
-    dtostrf(weights[1], 4, 1, channel2_weight_str);
-    dtostrf(weights[2], 4, 1, channel3_weight_str);
-    dtostrf(weights[3], 4, 1, channel4_weight_str);
+    dtostrf(weights[0], 4, 1, channel0_weight_str);
+    dtostrf(weights[1], 4, 1, channel1_weight_str);
+    dtostrf(weights[2], 4, 1, channel2_weight_str);
+    dtostrf(weights[3], 4, 1, channel3_weight_str);
     dtostrf(weights[0]+weights[1]+weights[2]+weights[3], 4, 1, total_weight_str);
     
+    sprintf(buf, "channel0 weight = %s", channel0_weight_str);
+    debug_msg(buf);
     sprintf(buf, "channel1 weight = %s", channel1_weight_str);
     debug_msg(buf);
     sprintf(buf, "channel2 weight = %s", channel2_weight_str);
     debug_msg(buf);
     sprintf(buf, "channel3 weight = %s", channel3_weight_str);
-    debug_msg(buf);
-    sprintf(buf, "channel4 weight = %s", channel4_weight_str);
     debug_msg(buf);
     sprintf(buf, "total weight = %s", total_weight_str);
     debug_msg(buf);
@@ -207,15 +207,15 @@ void loop()
     if(epoch % 60 == 0){
       debug_msg("uploading...");
 
-      weights[0] = channel1_scale.get_units(5);
-      weights[1] = channel2_scale.get_units(5);
-      weights[2] = channel3_scale.get_units(5);
-      weights[3] = channel4_scale.get_units(5);
+      weights[0] = channel0_scale.get_units(5);
+      weights[1] = channel1_scale.get_units(5);
+      weights[2] = channel2_scale.get_units(5);
+      weights[3] = channel3_scale.get_units(5);
       
-      dtostrf(weights[0], 4, 1, channel1_weight_str);
-      dtostrf(weights[1], 4, 1, channel2_weight_str);
-      dtostrf(weights[2], 4, 1, channel3_weight_str);
-      dtostrf(weights[3], 4, 1, channel4_weight_str);
+      dtostrf(weights[0], 4, 1, channel0_weight_str);
+      dtostrf(weights[1], 4, 1, channel1_weight_str);
+      dtostrf(weights[2], 4, 1, channel2_weight_str);
+      dtostrf(weights[3], 4, 1, channel3_weight_str);
       dtostrf(weights[0]+weights[1]+weights[2]+weights[3], 4, 1, total_weight_str);
 
       for(int i = 0; i < sizeof(fiap_elements)/sizeof(fiap_elements[0]); i++){
@@ -236,10 +236,10 @@ void loop()
     }
   }
 
+  channel0_scale.power_down();
   channel1_scale.power_down();
   channel2_scale.power_down();
   channel3_scale.power_down();
-  channel4_scale.power_down();
 
   old_epoch = epoch;
 }
